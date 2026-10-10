@@ -153,3 +153,86 @@ packages/               superset-jalali-sql
 ```
 
 Demo passwords are fixed on purpose. Change `SUPERSET_SECRET_KEY` and the database passwords before any shared deployment.
+
+## فارسی
+
+<div dir="rtl" lang="fa">
+
+<h2>سوپرست با تاریخ شمسی</h2>
+
+<p>جدول فروش فقط <code dir="ltr">sale_date</code> میلادی دارد. سال، ماه، روز، فصل و روز هفته هنگام اجرای کوئری ساخته می‌شوند. در PostgreSQL نه افزونهٔ تقویم نصب می‌شود، نه تابع ذخیره‌شده، نه ستون اضافه روی <code dir="ltr">sales</code>.</p>
+
+<h3>اجرا</h3>
+
+<pre dir="ltr"><code>docker compose up --build -d</code></pre>
+
+<p>بعد از تمام شدن <code dir="ltr">superset-init</code>، سوپرست روی <code dir="ltr">http://localhost:8088</code> است. ورود: <code dir="ltr">admin</code> / <code dir="ltr">admin</code>. اگر پورت ۸۰۸۸ گرفته باشد:</p>
+
+<pre dir="ltr"><code>SUPERSET_PORT=8099 docker compose up --build -d</code></pre>
+
+<p>اتصال پایگاه نمونه، از داخل خود سوپرست (نه از <code dir="ltr">localhost</code>):</p>
+
+<pre dir="ltr"><code>postgresql+psycopg2://demo_reader:demo_reader@db:5432/demo</code></pre>
+
+<p>دیتاست مجازی را با این SQL بسازید و به نام <code dir="ltr">sales_jalali</code> ذخیره کنید:</p>
+
+<pre dir="ltr"><code>SELECT s.*, {{ jalali_columns('s.sale_date') }}
+FROM sales s
+{{ jalali_join('s.sale_date') }}</code></pre>
+
+<p>ردیف‌های نمونه از نوروز ۱۴۰۳ تا روز پیش از نوروز ۱۴۰۴ هستند (<code dir="ltr">2024-03-20</code> تا <code dir="ltr">2025-03-19</code>).</p>
+
+<h3>کار <code dir="ltr">jalali_join</code></h3>
+
+<p>این ماکرو خودِ روز را تبدیل نمی‌کند. فقط سال شمسیِ دربرگیرندهٔ تاریخ میلادی را به ردیف وصل می‌کند. سوپرست آن را به یک <code dir="ltr">LEFT JOIN</code> روی فهرست نوروز تبدیل می‌کند. در این دمو فهرست سال‌های ۱۳۹۰ تا ۱۴۲۰ است. هر ردیف سه مقدار دارد: شمارهٔ سال، تاریخ میلادی نوروز همان سال، و تاریخ میلادی نوروز سال بعد.</p>
+
+<pre dir="ltr"><code>LEFT JOIN (VALUES
+  (1403, DATE '2024-03-20', DATE '2025-03-21'),
+  (1404, DATE '2025-03-21', DATE '2026-03-21')
+) AS _jy(jy, start_date, next_start_date)
+  ON CAST(s.sale_date AS DATE) &gt;= _jy.start_date
+ AND CAST(s.sale_date AS DATE) &lt;  _jy.next_start_date</code></pre>
+
+<p>تاریخ <code dir="ltr">2024-09-22</code> از نوروز ۱۴۰۳ گذشته و به نوروز ۱۴۰۴ نرسیده، پس <code dir="ltr">_jy.jy</code> برابر ۱۴۰۳ است. اگر تاریخ تهی باشد یا بیرون از بازهٔ تنظیم‌شده بیفتد، ردیف فروش می‌ماند و <code dir="ltr">_jy.jy</code> تهی است.</p>
+
+<h3>ساخت هر ستون</h3>
+
+<p><code dir="ltr">jalali_columns</code> تعداد روزهای گذشته از همان نوروز را می‌شمارد. این عدد را <code dir="ltr">doy</code> می‌نامیم. اول فروردین یعنی <code dir="ltr">doy = 0</code>.</p>
+
+<p>شش ماه اول هر کدام ۳۱ روزند و روی هم ۱۸۶ روز. مهر تا بهمن هر کدام ۳۰ روز. اسفند تا نوروز بعد ادامه دارد و ۲۹ یا ۳۰ روز است.</p>
+
+<pre dir="ltr"><code>month   = doy &lt; 186 ? doy / 31 + 1       : (doy - 186) / 30 + 7
+day     = doy &lt; 186 ? doy % 31 + 1       : (doy - 186) % 30 + 1
+season  = (month - 1) / 3 + 1
+weekday = (EXTRACT(DOW FROM sale_date) + 1) % 7</code></pre>
+
+<p>فصل ۱ بهار، ۲ تابستان، ۳ پاییز و ۴ زمستان است. PostgreSQL یکشنبه را ۰ می‌شمارد. با جمعِ یک و باقیمانده بر ۷، شنبه ۰ می‌شود و نام‌ها از شنبه تا جمعه ردیف می‌شوند.</p>
+
+<p>همهٔ ستون‌های زیر داخل این قالب‌اند: اگر <code dir="ltr">_jy.jy</code> تهی باشد نتیجه تهی است، وگرنه عبارت ستون. تقسیم، تقسیم صحیح PostgreSQL است.</p>
+
+<table>
+<thead>
+<tr><th>ستون</th><th>عبارت</th></tr>
+</thead>
+<tbody>
+<tr><td dir="ltr"><code>jalali_year</code></td><td>خودِ <code dir="ltr">_jy.jy</code></td></tr>
+<tr><td dir="ltr"><code>jalali_month_num</code></td><td>شمارهٔ ماه، همان <code dir="ltr">month</code></td></tr>
+<tr><td dir="ltr"><code>jalali_day</code></td><td>روز ماه، همان <code dir="ltr">day</code></td></tr>
+<tr><td dir="ltr"><code>jalali_date</code></td><td>سال و ماه و روز با خط کج و دو رقم، مثل <code dir="ltr">1403/07/18</code></td></tr>
+<tr><td dir="ltr"><code>jalali_date_int</code></td><td><code dir="ltr">year * 10000 + month * 100 + day</code>، مثل <code dir="ltr">14030718</code></td></tr>
+<tr><td dir="ltr"><code>jalali_month</code></td><td>سال و ماه با خط تیره، مثل <code dir="ltr">1403-07</code></td></tr>
+<tr><td dir="ltr"><code>jalali_month_name</code></td><td>نام ماه با <code dir="ltr">CASE</code>، از فروردین تا اسفند</td></tr>
+<tr><td dir="ltr"><code>jalali_month_label</code></td><td>ماه به‌اضافهٔ نام، مثل <code dir="ltr">1403-07 مهر</code></td></tr>
+<tr><td dir="ltr"><code>jalali_season</code></td><td>نام فصل با <code dir="ltr">CASE</code></td></tr>
+<tr><td dir="ltr"><code>jalali_season_key</code></td><td>سال، شمارهٔ فصل و نام، مثل <code dir="ltr">1403-3 پاییز</code></td></tr>
+<tr><td dir="ltr"><code>jalali_weekday</code></td><td>نام روز هفته، شنبه تا جمعه</td></tr>
+<tr><td dir="ltr"><code>jalali_weekday_num</code></td><td>شمارهٔ روز؛ شنبه ۰ و جمعه ۶</td></tr>
+<tr><td dir="ltr"><code>jalali_week_start</code></td><td>تاریخ میلادی منهای شمارهٔ روز هفته، یعنی شنبهٔ همان هفته</td></tr>
+</tbody>
+</table>
+
+<p>بازهٔ عددی روی <code dir="ltr">jalali_date_int</code> همان بازهٔ شمسی است. <code dir="ltr">14030701</code> تا <code dir="ltr">14030730</code> یعنی ۱ تا ۳۰ مهر ۱۴۰۳ و با این شرط میلادی یکی است: <code dir="ltr">sale_date &gt;= DATE '2024-09-22' AND sale_date &lt; DATE '2024-10-22'</code>.</p>
+
+<p>در این دمو رقم‌های متنی لاتین می‌مانند (<code dir="ltr">digits: latin</code>) تا فیلتر به ترتیب تقویم مرتب شود. <code dir="ltr">digits='persian'</code> فقط ستون‌های متنی را به ارقام فارسی برمی‌گرداند. ستون‌های عددی لاتین می‌مانند تا نوع عددشان نشکند. بازهٔ سال در <code dir="ltr">superset_config.py</code> روی ۱۳۹۰ تا ۱۴۲۰ است. نتیجهٔ تاریخ‌های داخل این بازه با جدول کامل ۱۳۵۰ تا ۱۵۵۰ یکی است.</p>
+
+</div>
