@@ -77,13 +77,55 @@ sale_date >= DATE '2024-09-22' AND sale_date < DATE '2024-10-22'
 
 ## How a date becomes Jalali
 
-`nowruz.py` stores the Gregorian date of Nowruz for each year from 1350 to 1550. `jalali_join` turns that table into a `VALUES` list and left-joins it so:
+`nowruz.py` stores the Gregorian date of Nowruz for each year from 1350 to 1550. `jalali_join('s.sale_date')` does not convert the day. It only attaches the Shamsi year that contains that Gregorian date.
 
-```text
-sale_date >= start_date AND sale_date < next_start_date
+Superset replaces the macro with a `LEFT JOIN` against a `VALUES` list. In this demo the list is years 1390–1420. Each row is the year, Nowruz of that year, and Nowruz of the next year:
+
+```sql
+LEFT JOIN (VALUES
+  (1403, DATE '2024-03-20', DATE '2025-03-21'),
+  (1404, DATE '2025-03-21', DATE '2026-03-21')
+) AS _jy(jy, start_date, next_start_date)
+  ON CAST(s.sale_date AS DATE) >= _jy.start_date
+ AND CAST(s.sale_date AS DATE) <  _jy.next_start_date
 ```
 
-`jalali_columns` counts the days since that Nowruz. The first six months are 31 days (186 days). The next five are 30. Esfand is whatever remains until the next Nowruz, 29 or 30. A NULL date, or a date outside the configured years, leaves every Jalali column NULL and keeps the sales row.
+`2024-09-22` is on or after Nowruz 1403 and before Nowruz 1404, so `_jy.jy` is 1403. A NULL date, or a date outside the configured years, stays in the result with `_jy.jy` NULL.
+
+## How each column is generated
+
+`jalali_columns` counts the days from that Nowruz. Call that count `doy`. 1 Farvardin is `doy = 0`.
+
+The first six months are 31 days, 186 days in total. Mehr through Bahman are 30 days each. Esfand runs until the next Nowruz (29 or 30 days).
+
+```text
+month = doy < 186 ? doy / 31 + 1        : (doy - 186) / 30 + 7
+day   = doy < 186 ? doy % 31 + 1        : (doy - 186) % 30 + 1
+season = (month - 1) / 3 + 1            -- 1 بهار, 2 تابستان, 3 پاییز, 4 زمستان
+weekday = (EXTRACT(DOW FROM sale_date) + 1) % 7
+```
+
+PostgreSQL numbers Sunday as 0. Adding 1 and wrapping makes Saturday 0, so the names line up as شنبه … جمعه.
+
+Every column below is wrapped as `CASE WHEN _jy.jy IS NULL THEN NULL ELSE <expr> END`. Integer division is the PostgreSQL `/` on these values.
+
+| Column | Expression |
+|---|---|
+| `jalali_year` | `_jy.jy` |
+| `jalali_month_num` | `month` |
+| `jalali_day` | `day` |
+| `jalali_date` | `year \|\| '/' \|\| lpad(month) \|\| '/' \|\| lpad(day)` → `1403/07/18` |
+| `jalali_date_int` | `year * 10000 + month * 100 + day` → `14030718` |
+| `jalali_month` | `year \|\| '-' \|\| lpad(month)` → `1403-07` |
+| `jalali_month_name` | `CASE month WHEN 1 THEN 'فروردین' … WHEN 12 THEN 'اسفند' END` |
+| `jalali_month_label` | `jalali_month \|\| ' ' \|\| jalali_month_name` → `1403-07 مهر` |
+| `jalali_season` | `CASE season WHEN 1 THEN 'بهار' … WHEN 4 THEN 'زمستان' END` |
+| `jalali_season_key` | `year \|\| '-' \|\| season \|\| ' ' \|\| season name` → `1403-3 پاییز` |
+| `jalali_weekday` | `CASE weekday WHEN 0 THEN 'شنبه' … WHEN 6 THEN 'جمعه' END` |
+| `jalali_weekday_num` | `weekday` |
+| `jalali_week_start` | `sale_date - weekday`, the Gregorian Saturday of that week |
+
+`lpad` writes the month and day as two digits. With `digits: latin` (this demo) the text stays `0-9`, so filters sort in calendar order. `digits='persian'` runs `TRANSLATE` on the text columns only (`jalali_date`, `jalali_month`, `jalali_month_name`, `jalali_month_label`, `jalali_season`, `jalali_season_key`, `jalali_weekday`). The numeric columns stay Latin so they remain numbers.
 
 This demo narrows the join to 1390–1420 in `superset_config.py` (`JALALI_SQL`). Results inside that span match the full 1350–1550 table. Widen `min_year` / `max_year` there if you need more; both ends must stay inside 1350–1550.
 
